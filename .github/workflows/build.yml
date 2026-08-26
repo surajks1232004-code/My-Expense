@@ -1,0 +1,154 @@
+name: Android CI & Build APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android Build-Tools & Accept Licenses
+        run: |
+          echo "=== Accepting Android SDK Licenses ==="
+          yes | sdkmanager --licenses || true
+          echo "=== Installing required SDK platforms & tools ==="
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "build-tools;35.0.0" "cmdline-tools;latest" || true
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Prepare Secrets, Keystore & Configuration
+        run: |
+          echo "=== Generating dummy google-services.json ==="
+          DUMMY_GOOGLE_SERVICES='{
+            "project_info": {
+              "project_number": "123456789012",
+              "project_id": "myexpense-placeholder",
+              "storage_bucket": "myexpense-placeholder.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:123456789012:android:abcdef1234567890",
+                  "android_client_info": {
+                    "package_name": "com.aistudio.vaultpulse.vpmqtz"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [
+                  {
+                    "current_key": "AIzaSyDummyPlaceholderKeyForCIBuild12345"
+                  }
+                ],
+                "services": {
+                  "appinvite_service": {
+                    "other_platform_oauth_client": []
+                  }
+                }
+              },
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:123456789012:android:abcdef1234567891",
+                  "android_client_info": {
+                    "package_name": "com.example"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [
+                  {
+                    "current_key": "AIzaSyDummyPlaceholderKeyForCIBuild12345"
+                  }
+                ],
+                "services": {
+                  "appinvite_service": {
+                    "other_platform_oauth_client": []
+                  }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }'
+
+          # Place google-services.json in root app/ and all subdirectories
+          mkdir -p app
+          echo "$DUMMY_GOOGLE_SERVICES" > app/google-services.json
+
+          for app_dir in $(find . -maxdepth 4 -type d -name "app"); do
+            echo "$DUMMY_GOOGLE_SERVICES" > "$app_dir/google-services.json"
+            echo "Configured google-services.json in $app_dir"
+          done
+
+          echo "=== Setting up debug.keystore & Environment Files ==="
+          setup_keystore_and_env() {
+            local dir="$1"
+            if [ -f "$dir/debug.keystore.base64" ]; then
+              base64 -d "$dir/debug.keystore.base64" > "$dir/debug.keystore"
+            elif [ ! -f "$dir/debug.keystore" ]; then
+              keytool -genkey -v -keystore "$dir/debug.keystore" \
+                -storepass android -alias androiddebugkey -keypass android \
+                -keyalg RSA -keysize 2048 -validity 10000 \
+                -dname "CN=Android Debug,O=Android,C=US"
+            fi
+            touch "$dir/.env" "$dir/.env.example"
+          }
+
+          setup_keystore_and_env "."
+
+          for pdir in $(find . -maxdepth 3 -name "settings.gradle.kts" -o -name "settings.gradle" | xargs -r dirname); do
+            setup_keystore_and_env "$pdir"
+          done
+
+          # Ensure Gradle wrapper exists or can be run
+          if [ ! -f "./gradlew" ]; then
+            echo "Generating Gradle wrapper files..."
+            gradle wrapper --gradle-version 9.3.1 || true
+          fi
+          find . -name "gradlew" -exec chmod +x {} +
+
+      - name: Build Debug APK
+        run: |
+          # Detect project directory containing settings.gradle.kts or settings.gradle
+          PROJECT_DIR="."
+          if [ ! -f "settings.gradle.kts" ] && [ ! -f "settings.gradle" ]; then
+            FOUND_DIR=$(find . -maxdepth 3 -name "settings.gradle.kts" -o -name "settings.gradle" | head -n 1 | xargs -r dirname)
+            if [ -n "$FOUND_DIR" ]; then
+              PROJECT_DIR="$FOUND_DIR"
+            fi
+          fi
+
+          echo "Building Android project in directory: $PROJECT_DIR"
+          cd "$PROJECT_DIR"
+
+          if [ -f "./gradlew" ]; then
+            ./gradlew assembleDebug --no-daemon --stacktrace
+          else
+            gradle assembleDebug --no-daemon --stacktrace
+          fi
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: myexpense-debug-apk
+          path: "**/build/outputs/apk/debug/*.apk"
+          if-no-files-found: error

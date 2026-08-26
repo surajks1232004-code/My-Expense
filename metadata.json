@@ -1,0 +1,6 @@
+{
+  "name": "My Expense",
+  "description": "Clean, Modern Automated Personal Finance & Expense Tracker with On-Device SMS Intelligence",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
